@@ -10,5 +10,5 @@ $('#ordersBody').addEventListener('click',async e=>{const button=e.target.closes
  if(act==='proof'){window.open(`/api/admin/orders/${id}/proof`,'_blank','noopener');return;}
  const confirmMsg=act==='approve'?`Have you personally verified the FNB bank credit, exact amount, and HIRED-${id} reference?`:(act==='reject'?'Mark this order as rejected?':'Permanently delete this order and customer details?');
  if(!confirm(confirmMsg))return;
- button.disabled=true;try{await api(`/api/admin/orders/${id}/${act}`,'POST',{});$('#notice').textContent=`Order ${id}: ${act} successful.`;await refresh();}catch(e){$('#notice').textContent=e.message;button.disabled=false;}
+ button.disabled=true;try{await api(`/api/admin/orders/${id}/${act}`,'POST',act==='approve'?{bankCreditVerified:true,reference:`HIRED-${id}`} : {});$('#notice').textContent=`Order ${id}: ${act} successful.`;await refresh();}catch(e){$('#notice').textContent=e.message;button.disabled=false;}
 });refresh();})();

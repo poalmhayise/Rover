@@ -45,7 +45,9 @@ BANK={
     'swift':os.getenv('HIRED_BANK_SWIFT','').strip(),
 }
 LOGIN_ATTEMPTS={}
-READY=bool(BANK['accountName'] and BANK['accountNumber'] and USD_BANK_VERIFIED)
+PERSISTENCE_CONFIRMED=os.getenv('HIRED_PERSISTENT_STORAGE_CONFIRMED','0')=='1'
+SUPPORT_EMAIL=os.getenv('HIRED_SUPPORT_EMAIL','').strip()
+READY=bool(BANK['accountName'] and BANK['accountNumber'] and USD_BANK_VERIFIED and PERSISTENCE_CONFIRMED and ADMIN_PASSWORD and SECRET and SUPPORT_EMAIL)
 
 def db():
     con=sqlite3.connect(DB,timeout=20)

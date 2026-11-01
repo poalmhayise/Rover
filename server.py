@@ -180,7 +180,7 @@ def verify_remote_storage_roundtrip():
         with db() as con:
             con.execute('INSERT INTO orders(id,token_hash,doc_type,theme,details,status,bank_amount,created_at) '
                         'VALUES(?,?,?,?,?,?,?,?)',
-                        (test_id,'test-token-not-issued','cv','navy',details,'pending_payment',AMOUNT,now()))
+                        (test_id,'test-token-not-issued','cv','navy',details,'pending_payment',AMOUNT,datetime.now(timezone.utc).isoformat(timespec='seconds')))
             row=con.execute('SELECT status FROM orders WHERE id=?',(test_id,)).fetchone()
             if row is None or row['status']!='pending_payment':
                 raise RuntimeError('Neon database insert/read mismatch')

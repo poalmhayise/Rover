@@ -2,7 +2,7 @@
 
 A real working web app with four creative templates, live previews, payment-reference generation, FNB bank-transfer checkout, secure receipt uploads, manual owner payment confirmation, an admin dashboard, and PDF downloads after approval.
 
-**Worldwide launch:** see `DEPLOY_PUBLIC.md` and `render.yaml` for a production-ready hosting plan and search-engine discovery setup. This project is not yet deployed; to publish it requires a hosting account.
+**Worldwide launch:** see `DEPLOY_PUBLIC.md` and `render.yaml` for a production-ready hosting plan and search-engine discovery setup. The public preview is live at https://hired-documents-preview.onrender.com. Real-money checkout stays blocked until persistent storage, owner banking details, and support configuration are confirmed. Render requires a paid web service with a persistent disk for safe order processing.
 
 ## Important: how payment works
 

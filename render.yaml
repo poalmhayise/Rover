@@ -32,3 +32,10 @@ services:
         sync: false
       - key: HIRED_USD_BANK_VERIFIED
         value: "0"
+
+      - key: HIRED_PERSISTENT_STORAGE_CONFIRMED
+        value: "0"
+      - key: HIRED_SUPPORT_EMAIL
+        sync: false
+      - key: HIRED_PUBLIC_URL
+        sync: false

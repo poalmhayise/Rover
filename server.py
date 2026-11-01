@@ -294,6 +294,11 @@ class HiredHandler(BaseHTTPRequestHandler):
         parts=urlsplit(self.path)
         path=parts.path
         query=parse_qs(parts.query)
+        # Google Search Console HTML-file ownership verification. Serve only
+        # exact root-level google*.html files checked into the source tree.
+        # No wildcard access to project files, secrets or uploaded documents.
+        if re.fullmatch(r'/google[A-Za-z0-9_-]{8,128}\.html', path):
+            return self.serve_static(ROOT/path[1:], 'text/html; charset=utf-8')
         if path in ('/','/index.html'):
             return self.serve_page('index.html','/')
         if path=='/resume-builder':return self.serve_page('resume-builder.html','/resume-builder')

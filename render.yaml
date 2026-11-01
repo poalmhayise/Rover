@@ -1,23 +1,17 @@
-# Hired public deployment on Render. This requires a PAID web service
-# and a persistent disk because customer orders and receipt uploads are private data.
-# NEVER commit .env or customer data to a public GitHub repository.
+# Hired's zero-disk deployment on Render Free.
+# PostgreSQL and private file storage are managed by Neon, never local Render files.
+# Configure ALL private values only in the Render dashboard, not GitHub.
 services:
   - type: web
     name: hired-documents
     runtime: python
-    plan: 0.5c-512mb
+    plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: python server.py
     healthCheckPath: /
-    disk:
-      name: hired-persistent-data
-      mountPath: /opt/render/project/src/data
-      sizeGB: 1
     envVars:
       - key: HIRED_HOST
         value: 0.0.0.0
-      - key: HIRED_DATA_DIR
-        value: /opt/render/project/src/data
       - key: HIRED_HTTPS_ONLY
         value: "1"
       - key: HIRED_SECRET_KEY
@@ -32,10 +26,19 @@ services:
         sync: false
       - key: HIRED_USD_BANK_VERIFIED
         value: "0"
-
-      - key: HIRED_PERSISTENT_STORAGE_CONFIRMED
-        value: "0"
       - key: HIRED_SUPPORT_EMAIL
         sync: false
       - key: HIRED_PUBLIC_URL
+        sync: false
+      - key: HIRED_DATABASE_URL
+        sync: false
+      - key: HIRED_S3_BUCKET
+        sync: false
+      - key: HIRED_S3_ENDPOINT
+        sync: false
+      - key: HIRED_S3_ACCESS_KEY_ID
+        sync: false
+      - key: HIRED_S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: HIRED_S3_REGION
         sync: false

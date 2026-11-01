@@ -2,7 +2,7 @@
 
 A real working web app with four creative templates, live previews, payment-reference generation, FNB bank-transfer checkout, secure receipt uploads, manual owner payment confirmation, an admin dashboard, and PDF downloads after approval.
 
-**Worldwide launch:** see `DEPLOY_PUBLIC.md` and `render.yaml` for a production-ready hosting plan and search-engine discovery setup. The public preview is live at https://hired-documents-preview.onrender.com. Real-money checkout stays blocked until persistent storage, owner banking details, and support configuration are confirmed. Render requires a paid web service with a persistent disk for safe order processing.
+**Worldwide launch:** see `DEPLOY_PUBLIC.md` and `render.yaml` for a production-ready hosting plan and search-engine discovery setup. This project is not yet deployed; to publish it requires a hosting account.
 
 ## Important: how payment works
 
@@ -84,3 +84,7 @@ Edit `/static/index.html`, `/static/style.css`, `/static/app.js`, and `pdf_docum
 ```bash
 python -m pytest tests -q
 ```
+
+## Production checkout safety gate
+
+Hired runs in **public preview mode** until the bank account is verified for incoming USD payments, persistent storage is attached (and `HIRED_PERSISTENT_STORAGE_CONFIRMED=1` set), a support email, admin password and secret key are configured. Set the persistence flag only when the disk is mounted and backed up. On free hosting leave checkout disabled. Never upload customer documents or bank receipts to ephemeral storage.

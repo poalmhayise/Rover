@@ -13,6 +13,21 @@ from urllib.parse import parse_qs, urlsplit
 from html import escape as html_escape
 from pdf_documents import build_pdf
 
+# External database and storage libraries are loaded only when configured.
+# This preserves a local SQLite mode for development, never for paid Render checkout.
+try:
+    import psycopg
+    from psycopg.rows import dict_row
+except ImportError:
+    psycopg = None
+    dict_row = None
+try:
+    import boto3
+    from botocore.client import Config as S3Config
+except ImportError:
+    boto3 = None
+    S3Config = None
+
 ROOT=Path(__file__).resolve().parent
 
 def load_env():
@@ -24,10 +39,40 @@ def load_env():
             os.environ.setdefault(key.strip(),value.strip().strip('"').strip("'"))
 load_env()
 DATA=Path(os.getenv('HIRED_DATA_DIR',str(ROOT/'data'))).resolve()
-DATA.mkdir(parents=True,exist_ok=True)
-PROOFS=DATA/'payment_proofs'
-PROOFS.mkdir(parents=True,exist_ok=True)
-DB=DATA/'hired.sqlite3'
+# The Neon database URL MUST be a Render environment secret, never committed to GitHub.
+POSTGRES_DSN=os.getenv('HIRED_DATABASE_URL','').strip()
+USE_POSTGRES=bool(POSTGRES_DSN)
+if USE_POSTGRES and psycopg is None:
+    raise RuntimeError('Install psycopg[binary] to use Neon PostgreSQL')
+# Files are written to S3-compatible private object storage in Neon when configured.
+S3_BUCKET=os.getenv('HIRED_S3_BUCKET','').strip()
+S3_ENDPOINT=os.getenv('HIRED_S3_ENDPOINT',os.getenv('AWS_ENDPOINT_URL_S3','')).strip()
+S3_KEY=os.getenv('HIRED_S3_ACCESS_KEY_ID',os.getenv('AWS_ACCESS_KEY_ID','')).strip()
+S3_SECRET=os.getenv('HIRED_S3_SECRET_ACCESS_KEY',os.getenv('AWS_SECRET_ACCESS_KEY','')).strip()
+S3_REGION=os.getenv('HIRED_S3_REGION',os.getenv('AWS_REGION','us-east-2')).strip()
+HAS_S3_CONFIG=bool(S3_BUCKET and S3_ENDPOINT.startswith('https://') and S3_KEY and S3_SECRET and boto3)
+_S3_CLIENT=None
+
+def s3_client():
+    global _S3_CLIENT
+    if not HAS_S3_CONFIG:
+        raise RuntimeError('Private Neon object storage is not configured')
+    if _S3_CLIENT is None:
+        _S3_CLIENT=boto3.client('s3',endpoint_url=S3_ENDPOINT,
+            aws_access_key_id=S3_KEY,aws_secret_access_key=S3_SECRET,
+            region_name=S3_REGION,
+            config=S3Config(s3={'addressing_style':'path'},connect_timeout=6,
+                            read_timeout=12,retries={'max_attempts':2}))
+    return _S3_CLIENT
+
+if not USE_POSTGRES:
+    DATA.mkdir(parents=True,exist_ok=True)
+    PROOFS=DATA/'payment_proofs'
+    PROOFS.mkdir(parents=True,exist_ok=True)
+    DB=DATA/'hired.sqlite3'
+else:
+    PROOFS=None
+    DB=None
 SECRET=os.getenv('HIRED_SECRET_KEY','')
 ADMIN_PASSWORD=os.getenv('HIRED_ADMIN_PASSWORD','')
 HTTPS_ONLY=os.getenv('HIRED_HTTPS_ONLY','0')=='1'
@@ -45,23 +90,90 @@ BANK={
     'swift':os.getenv('HIRED_BANK_SWIFT','').strip(),
 }
 LOGIN_ATTEMPTS={}
-PERSISTENCE_CONFIRMED=(os.getenv('HIRED_PERSISTENT_STORAGE_CONFIRMED','0')=='1' and (not os.getenv('RENDER') or os.path.ismount(DATA)))
 SUPPORT_EMAIL=os.getenv('HIRED_SUPPORT_EMAIL','').strip()
-READY=bool(BANK['accountName'] and BANK['accountNumber'] and USD_BANK_VERIFIED and PERSISTENCE_CONFIRMED and ADMIN_PASSWORD and SECRET and SUPPORT_EMAIL)
+
+class PostgreSQLSession:
+    """Give both PostgreSQL and SQLite the small query API used by this app."""
+    def __init__(self):
+        self.connection=psycopg.connect(POSTGRES_DSN,row_factory=dict_row,connect_timeout=8)
+    def __enter__(self):return self
+    def execute(self,query,values=()):
+        # SQL in this project uses DB-API qmark placeholders. psycopg uses %s.
+        return self.connection.execute(query.replace('?', '%s'),values)
+    def __exit__(self,exc_type,exc_value,traceback):
+        try:
+            if exc_type is None:self.connection.commit()
+            else:self.connection.rollback()
+        finally:self.connection.close()
+        return False
 
 def db():
+    if USE_POSTGRES:return PostgreSQLSession()
     con=sqlite3.connect(DB,timeout=20)
     con.row_factory=sqlite3.Row
     return con
 
 def setup_db():
     with db() as con:
-        con.execute('''CREATE TABLE IF NOT EXISTS orders (
+        con.execute("""CREATE TABLE IF NOT EXISTS orders (
            id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, doc_type TEXT NOT NULL,
            theme TEXT NOT NULL, details TEXT NOT NULL, status TEXT NOT NULL,
            bank_amount TEXT NOT NULL, created_at TEXT NOT NULL,
-           proof_path TEXT DEFAULT NULL, reviewed_at TEXT DEFAULT NULL)''')
-setup_db()
+           proof_path TEXT DEFAULT NULL, reviewed_at TEXT DEFAULT NULL)""")
+
+def object_key(order_id,extension):
+    return f'payment-proofs/{order_id}.{extension}'
+
+def store_proof(order_id,ext,body):
+    if USE_POSTGRES:
+        key=object_key(order_id,ext)
+        s3_client().put_object(Bucket=S3_BUCKET,Key=key,Body=body,
+                               ContentType={'pdf':'application/pdf','png':'image/png','jpg':'image/jpeg'}[ext])
+        return key
+    path=f'{order_id}.{ext}'
+    (PROOFS/path).write_bytes(body)
+    return path
+
+def get_proof(path):
+    if USE_POSTGRES:
+        if not re.fullmatch(r'payment-proofs/[A-F0-9]{12}\.(pdf|png|jpg)',path):
+            raise ValueError('Invalid storage key')
+        return s3_client().get_object(Bucket=S3_BUCKET,Key=path)['Body'].read()
+    safe=(PROOFS/path).resolve()
+    if not safe.is_relative_to(PROOFS.resolve()):raise ValueError('Invalid file')
+    return safe.read_bytes()
+
+def remove_proof(path):
+    if not path:return
+    if USE_POSTGRES:
+        if not re.fullmatch(r'payment-proofs/[A-F0-9]{12}\.(pdf|png|jpg)',path):
+            raise ValueError('Invalid storage key')
+        s3_client().delete_object(Bucket=S3_BUCKET,Key=path)
+    else:
+        safe=(PROOFS/path).resolve()
+        if not safe.is_relative_to(PROOFS.resolve()):raise ValueError('Invalid file')
+        safe.unlink(missing_ok=True)
+
+# Only enable paid checkout after the DB table and private bucket are reachable.
+REMOTE_STORAGE_VERIFIED=False
+if USE_POSTGRES:
+    try:
+        setup_db()
+        if HAS_S3_CONFIG:
+            s3_client().head_bucket(Bucket=S3_BUCKET)
+            REMOTE_STORAGE_VERIFIED=True
+    except Exception as exc:
+        print(f'Neon storage unavailable: {type(exc).__name__}; bank checkout stays disabled',flush=True)
+else:
+    setup_db()
+
+PERSISTENCE_CONFIRMED=(
+    (USE_POSTGRES and REMOTE_STORAGE_VERIFIED)
+    or (not USE_POSTGRES and not os.getenv('RENDER') and
+        os.getenv('HIRED_PERSISTENT_STORAGE_CONFIRMED','0')=='1')
+)
+READY=bool(BANK['accountName'] and BANK['accountNumber'] and USD_BANK_VERIFIED
+           and PERSISTENCE_CONFIRMED and ADMIN_PASSWORD and SECRET and SUPPORT_EMAIL)
 
 def token_hash(token): return hashlib.sha256(token.encode()).hexdigest()
 def now(): return datetime.now(timezone.utc).isoformat(timespec='seconds')
@@ -167,7 +279,7 @@ class HiredHandler(BaseHTTPRequestHandler):
         if path=='/api/config':
             return self.reply({'brand':'Hired','priceUsd':'0.60','bankCurrency':'USD','bankAmount':AMOUNT,
               'ready':READY,'usdBankVerified':USD_BANK_VERIFIED,'bank':BANK if READY else {'name':'FNB Eswatini'},
-              'supportEmail':os.getenv('HIRED_SUPPORT_EMAIL','').strip()})
+              'supportEmail':SUPPORT_EMAIL})
         m=re.fullmatch(r'/api/orders/([A-F0-9]{12})',path)
         if m:
             row=self.authorized_order(m[1],query.get('token',[''])[0])
@@ -197,11 +309,12 @@ class HiredHandler(BaseHTTPRequestHandler):
             if not is_admin(self):return self.error('Please sign in',401)
             row=self.get_order(m[1])
             if not row or not row['proof_path']:return self.error('No proof uploaded',404)
-            p=(PROOFS/row['proof_path']).resolve()
-            if not p.is_relative_to(PROOFS.resolve()):return self.error('Invalid file',404)
-            mime={'pdf':'application/pdf','png':'image/png','jpg':'image/jpeg'}.get(p.suffix.lstrip('.'),'application/octet-stream')
-            body=p.read_bytes()
-            self.headers_out(200,mime,len(body),{'Content-Disposition':'attachment; filename=payment-proof'+p.suffix})
+            ext=Path(row['proof_path']).suffix
+            if ext not in ('.pdf','.png','.jpg'):return self.error('Invalid proof type',404)
+            try:body=get_proof(row['proof_path'])
+            except Exception:return self.error('Could not retrieve proof',503)
+            mime={'pdf':'application/pdf','png':'image/png','jpg':'image/jpeg'}[ext[1:]]
+            self.headers_out(200,mime,len(body),{'Content-Disposition':'attachment; filename=payment-proof'+ext})
             return self.wfile.write(body)
         return self.error('Not found',404)
     def do_POST(self):
@@ -249,14 +362,14 @@ class HiredHandler(BaseHTTPRequestHandler):
             if ext=='pdf' and not raw.startswith(b'%PDF-'):return self.error('Invalid PDF')
             if ext=='png' and not raw.startswith(b'\x89PNG\r\n\x1a\n'):return self.error('Invalid PNG')
             if ext=='jpg' and not raw.startswith(b'\xff\xd8\xff'):return self.error('Invalid JPG')
-            filename=f'{m[1]}.{ext}'
-            # Remove any earlier proof from same order when replacing it.
-            if row['proof_path'] and row['proof_path']!=filename:
-                (PROOFS/row['proof_path']).unlink(missing_ok=True)
-            (PROOFS/filename).write_bytes(raw)
+            try:filename=store_proof(m[1],ext,raw)
+            except Exception:return self.error('Secure proof storage is unavailable; please retry',503)
             with db() as con:
                 con.execute('UPDATE orders SET proof_path=?,status=? WHERE id=?',
                            (filename,'awaiting_review',m[1]))
+            if row['proof_path'] and row['proof_path']!=filename:
+                try:remove_proof(row['proof_path'])
+                except Exception:pass  # Orphan cleanup can be retried safely.
             return self.reply({'ok':True,'status':'awaiting_review'})
         if path=='/api/admin/login':
             if not ADMIN_PASSWORD or not SECRET:return self.error('Admin login is not configured',503)
@@ -288,7 +401,9 @@ class HiredHandler(BaseHTTPRequestHandler):
             elif m[2]=='reject':
                 with db() as con:con.execute('UPDATE orders SET status=?,reviewed_at=? WHERE id=?',('rejected',now(),m[1]))
             else:
-                if row['proof_path']:(PROOFS/row['proof_path']).unlink(missing_ok=True)
+                if row['proof_path']:
+                    try:remove_proof(row['proof_path'])
+                    except Exception:return self.error('Unable to delete stored receipt; please retry',503)
                 with db() as con:con.execute('DELETE FROM orders WHERE id=?',(m[1],))
             return self.reply({'ok':True})
         return self.error('Not found',404)

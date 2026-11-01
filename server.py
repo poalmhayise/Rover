@@ -213,6 +213,7 @@ PERSISTENCE_CONFIRMED=(
 )
 READY=bool(BANK['accountName'] and BANK['accountNumber'] and USD_BANK_VERIFIED
            and PERSISTENCE_CONFIRMED and ADMIN_PASSWORD and SECRET and SUPPORT_EMAIL)
+print('Hired payment checkout: '+('ENABLED' if READY else 'DISABLED'), flush=True)
 
 def token_hash(token): return hashlib.sha256(token.encode()).hexdigest()
 def now(): return datetime.now(timezone.utc).isoformat(timespec='seconds')

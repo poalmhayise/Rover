@@ -1,0 +1,14 @@
+(()=>{'use strict';const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function api(path,method='GET',data){const r=await fetch(path,{method,headers:{'Content-Type':'application/json','X-Hired-Admin':'1'},body:data?JSON.stringify(data):undefined});const j=await r.json();if(!r.ok)throw new Error(j.error||'Request failed');return j;}
+function showDashboard(visible){$('#loginPanel').hidden=visible;$('#dashboard').hidden=!visible;}
+async function refresh(){try{const {orders}=await api('/api/admin/orders');showDashboard(true);$('#ordersBody').innerHTML=orders.length?orders.map(o=>`<tr><td><strong>HIRED-${esc(o.id)}</strong><br><small>${esc(new Date(o.date).toLocaleString())}</small></td><td><strong>${esc(o.name)}</strong><br><small>${esc(o.email)}</small></td><td>${o.type==='cv'?'CV / Resume':'Application letter'}</td><td>US$${esc(o.amount)} USD</td><td><span class="status-pill ${esc(o.status)}">${esc(o.status.replaceAll('_',' '))}</span></td><td>${o.proof?`<button class="adm-btn" data-act="proof" data-id="${esc(o.id)}">Proof ↗</button>`:''}${o.status!=='approved'?`<button class="adm-btn accept" data-act="approve" data-id="${esc(o.id)}" ${!o.proof?'disabled':''}>Approve</button>`:''}${o.status!=='rejected'?`<button class="adm-btn danger" data-act="reject" data-id="${esc(o.id)}">Reject</button>`:''}<button class="adm-btn danger" data-act="delete" data-id="${esc(o.id)}">Delete</button></td></tr>`).join(''):'<tr><td colspan="6">No orders yet. New orders will appear here.</td></tr>';
+ }catch(e){if(e.message==='Please sign in')showDashboard(false);$('#notice').textContent=e.message;}}
+$('#loginForm').addEventListener('submit',async e=>{e.preventDefault();$('#loginError').textContent='';try{await api('/api/admin/login','POST',{password:$('#password').value});$('#password').value='';await refresh();}catch(e){$('#loginError').textContent=e.message;}});
+$('#refresh').addEventListener('click',refresh);
+$('#logout').addEventListener('click',async()=>{try{await api('/api/admin/logout','POST',{});}finally{showDashboard(false);}});
+$('#ordersBody').addEventListener('click',async e=>{const button=e.target.closest('[data-act]');if(!button)return;const id=button.dataset.id,act=button.dataset.act;
+ if(act==='proof'){window.open(`/api/admin/orders/${id}/proof`,'_blank','noopener');return;}
+ const confirmMsg=act==='approve'?`Have you personally verified the FNB bank credit, exact amount, and HIRED-${id} reference?`:(act==='reject'?'Mark this order as rejected?':'Permanently delete this order and customer details?');
+ if(!confirm(confirmMsg))return;
+ button.disabled=true;try{await api(`/api/admin/orders/${id}/${act}`,'POST',{});$('#notice').textContent=`Order ${id}: ${act} successful.`;await refresh();}catch(e){$('#notice').textContent=e.message;button.disabled=false;}
+});refresh();})();

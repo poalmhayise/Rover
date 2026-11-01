@@ -45,7 +45,7 @@ BANK={
     'swift':os.getenv('HIRED_BANK_SWIFT','').strip(),
 }
 LOGIN_ATTEMPTS={}
-PERSISTENCE_CONFIRMED=os.getenv('HIRED_PERSISTENT_STORAGE_CONFIRMED','0')=='1'
+PERSISTENCE_CONFIRMED=(os.getenv('HIRED_PERSISTENT_STORAGE_CONFIRMED','0')=='1' and (not os.getenv('RENDER') or os.path.ismount(DATA)))
 SUPPORT_EMAIL=os.getenv('HIRED_SUPPORT_EMAIL','').strip()
 READY=bool(BANK['accountName'] and BANK['accountNumber'] and USD_BANK_VERIFIED and PERSISTENCE_CONFIRMED and ADMIN_PASSWORD and SECRET and SUPPORT_EMAIL)
 

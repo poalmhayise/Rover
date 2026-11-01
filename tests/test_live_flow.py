@@ -10,7 +10,7 @@ def test_live_payment_flow(tmp_path):
         s.bind(('127.0.0.1',0)); port=s.getsockname()[1]
     env={**os.environ,'HIRED_DATA_DIR':str(tmp_path/'db'),'HIRED_HOST':'127.0.0.1','HIRED_PORT':str(port),
          'HIRED_BANK_ACCOUNT_NAME':'Sample Holder','HIRED_BANK_ACCOUNT_NUMBER':'TEST-ONLY-NUMBER',
-         'HIRED_USD_BANK_VERIFIED':'1','HIRED_ADMIN_PASSWORD':'test secure password 123456',
+         'HIRED_USD_BANK_VERIFIED':'1','HIRED_PERSISTENT_STORAGE_CONFIRMED':'1','HIRED_SUPPORT_EMAIL':'support@example.com','HIRED_ADMIN_PASSWORD':'test secure password 123456',
          'HIRED_SECRET_KEY':'test key test key test key 1234567890','HIRED_HTTPS_ONLY':'0'}
     proc=subprocess.Popen([sys.executable,'server.py'],cwd=ROOT,env=env,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
     base=f'http://127.0.0.1:{port}'
@@ -46,7 +46,11 @@ def test_live_payment_flow(tmp_path):
         assert r.status_code==200, r.text
         r=sess.get(base+'/api/admin/orders',timeout=5);assert r.status_code==200
         assert r.json()['orders'][0]['status']=='awaiting_review'
+        # Receipt alone is not enough. The server also requires an explicit bank-credit check.
         r=sess.post(f'{base}/api/admin/orders/{id}/approve',json={},headers={'X-Hired-Admin':'1'},timeout=5)
+        assert r.status_code==409, r.text
+        r=sess.post(f'{base}/api/admin/orders/{id}/approve',json={'bankCreditVerified':True,
+            'reference':'HIRED-'+id},headers={'X-Hired-Admin':'1'},timeout=5)
         assert r.status_code==200, r.text
         r=requests.get(dl,timeout=5);assert r.status_code==200 and r.content.startswith(b'%PDF-')
         assert r.headers['Content-Type']=='application/pdf'

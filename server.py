@@ -154,16 +154,55 @@ def remove_proof(path):
         if not safe.is_relative_to(PROOFS.resolve()):raise ValueError('Invalid file')
         safe.unlink(missing_ok=True)
 
-# Only enable paid checkout after the DB table and private bucket are reachable.
+def verify_remote_storage_roundtrip():
+    """Prove real Neon DB and private receipt upload, retrieval and deletion.
+
+    The test order is inserted and deleted within one SQL transaction; no test
+    account is paid, and a sample proof object is always removed afterward.
+    """
+    if not (USE_POSTGRES and HAS_S3_CONFIG):
+        return False
+    setup_db()
+    s3_client().head_bucket(Bucket=S3_BUCKET)
+    test_id=secrets.token_hex(6).upper()
+    details=json.dumps({'fullName':'Hired Integration Test','email':'test@example.invalid',
+                        'summary':'Internal storage check only'})
+    pdf=build_pdf('cv',json.loads(details),'navy')
+    if not pdf.startswith(b'%PDF-') or len(pdf)<100:
+        raise RuntimeError('PDF document generation did not work')
+    key=None
+    try:
+        # Exercise the exact upload/download/delete functions used at checkout.
+        key=store_proof(test_id,'pdf',pdf)
+        received=get_proof(key)
+        if received!=pdf:
+            raise RuntimeError('Stored receipt did not match retrieved receipt')
+        with db() as con:
+            con.execute('INSERT INTO orders(id,token_hash,doc_type,theme,details,status,bank_amount,created_at) '
+                        'VALUES(?,?,?,?,?,?,?,?)',
+                        (test_id,'test-token-not-issued','cv','navy',details,'pending_payment',AMOUNT,now()))
+            row=con.execute('SELECT status FROM orders WHERE id=?',(test_id,)).fetchone()
+            if row is None or row['status']!='pending_payment':
+                raise RuntimeError('Neon database insert/read mismatch')
+            con.execute('UPDATE orders SET status=?,proof_path=? WHERE id=?',('awaiting_review',key,test_id))
+            row=con.execute('SELECT status,proof_path FROM orders WHERE id=?',(test_id,)).fetchone()
+            if row['status']!='awaiting_review' or row['proof_path']!=key:
+                raise RuntimeError('Neon order or proof update/read mismatch')
+            con.execute('DELETE FROM orders WHERE id=?',(test_id,))
+        return True
+    finally:
+        if key is not None:
+            remove_proof(key)
+
+# Fail closed until a real Neon storage round-trip (not just bucket existence) succeeds.
 REMOTE_STORAGE_VERIFIED=False
 if USE_POSTGRES:
     try:
-        setup_db()
-        if HAS_S3_CONFIG:
-            s3_client().head_bucket(Bucket=S3_BUCKET)
-            REMOTE_STORAGE_VERIFIED=True
+        REMOTE_STORAGE_VERIFIED=verify_remote_storage_roundtrip()
+        if REMOTE_STORAGE_VERIFIED:
+            print('Hired verified: Neon orders, private receipt upload/read/delete, PDF generation',flush=True)
     except Exception as exc:
-        print(f'Neon storage unavailable: {type(exc).__name__}; bank checkout stays disabled',flush=True)
+        print(f'Neon storage verification failed: {type(exc).__name__}; checkout disabled',flush=True)
 else:
     setup_db()
 
@@ -397,6 +436,12 @@ class HiredHandler(BaseHTTPRequestHandler):
             if not row:return self.error('Order not found',404)
             if m[2]=='approve':
                 if not row['proof_path']:return self.error('No payment proof submitted',409)
+                if payload.get('bankCreditVerified') is not True:
+                    return self.error('Verify the cleared FNB credit before approving',409)
+                if payload.get('reference')!='HIRED-'+m[1]:
+                    return self.error('Confirm the exact order reference from FNB',409)
+                if row['status']!='awaiting_review':
+                    return self.error('Order must be awaiting review before approval',409)
                 with db() as con:con.execute('UPDATE orders SET status=?,reviewed_at=? WHERE id=?',('approved',now(),m[1]))
             elif m[2]=='reject':
                 with db() as con:con.execute('UPDATE orders SET status=?,reviewed_at=? WHERE id=?',('rejected',now(),m[1]))
